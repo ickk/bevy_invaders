@@ -1,0 +1,12 @@
+[package]
+name = "bevy_invaders"
+version = "0.1.0"
+authors = ["ickk <git@ickk.io>"]
+edition = "2018"
+
+[dependencies]
+bevy = { git = "https://github.com/bevyengine/bevy", branch = "main" }
+
+[build-dependencies]
+chrono = "0.4"
+git2 = "0.13"
