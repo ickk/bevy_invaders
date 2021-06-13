@@ -25,6 +25,8 @@ fn main() {
     .add_system(projectile_move_system.system())
     .add_system(enemy_movement_system.system())
     .add_system(enemy_sprite_system.system())
+    // TODO: 1-frame lag between enemy movement system and enemy sprite system
+    .add_system(collision_system.system())
     .run();
 }
 
@@ -113,6 +115,28 @@ fn setup(
     x: 1.0,
     y: 5.0,
   }).insert(Timer::from_seconds(0.2, true));
+}
+
+fn collision_system(
+  query_projectile: Query<(Entity,
+                           &Transform),
+                          With<Projectile>>,
+  query_enemy: Query<(Entity,
+                      &Transform),
+                     With<Enemy>>,
+  mut commands: Commands,
+) {
+  for (projectile, projectile_transform) in query_projectile.iter() {
+    for (enemy, enemy_transform) in query_enemy.iter() {
+      if projectile_transform.translation.x < enemy_transform.translation.x + 20.0
+      && projectile_transform.translation.x > enemy_transform.translation.x - 20.0
+      && projectile_transform.translation.y < enemy_transform.translation.y + 20.0
+      && projectile_transform.translation.y > enemy_transform.translation.y - 20.0 {
+        commands.entity(enemy).despawn();
+        commands.entity(projectile).despawn();
+      }
+    }
+  }
 }
 
 fn enemy_movement_system(
