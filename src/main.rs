@@ -1,6 +1,8 @@
 use bevy::{prelude::*,
            sprite};
 use std::collections::HashMap;
+use std::time::{Instant,
+                Duration};
 
 fn print_build_metadata() {
   if let Some(build_date) = option_env!("BUILD_DATE") {
@@ -22,7 +24,6 @@ fn main() {
     .add_system(player_sprite_system.system())
     .add_system(player_shoot_system.system())
     .add_system(projectile_move_system.system())
-    .add_event::<ShootEvent>()
     .run();
 }
 
@@ -87,6 +88,7 @@ fn setup(
   })
   .insert(Player {
     facing: Direction::None,
+    shooting: None,
   })
   .insert(Velocity {
     x: 0.0,
@@ -97,22 +99,22 @@ fn setup(
 fn player_sprite_system(
   mut query: Query<(&mut TextureAtlasSprite,
                     &Velocity,
-                    &Player)>,
-  mut shootevent: EventReader<ShootEvent>,
+                    &mut Player)>,
 ) {
-  let (mut sprite, velocity, player) = query.single_mut()
+  let (mut sprite, _velocity, mut player) = query.single_mut()
     .expect("There was more than one player entity");
-  let mut event = None;
-  for e in shootevent.iter() {
-    event = Some(e);
+
+  if let Some(instant) = player.shooting {
+    if instant.elapsed() >= Duration::from_millis(100) {
+      player.shooting = None
+    }
   }
-  match (&player.facing, velocity.x.abs(), event) {
-    (Direction::Left, _, Some(e)) => {sprite.index = 0; eprintln!("debug: {:#?}", e)},
-    (Direction::Right, _, Some(_)) => sprite.index = 1,
-    // (Direction::Left, speed, Some(_)) if speed > 0.0 => sprite.index = 0,
-    // (Direction::Right, speed, Some(_)) if speed > 0.0 => sprite.index = 1,
-    (Direction::Left, _, None) => sprite.index = 4,
-    (Direction::Right, _, None) => sprite.index = 5,
+
+  match (&player.facing, &player.shooting) {
+    (Direction::Left, Some(_)) => sprite.index = 0,
+    (Direction::Right, Some(_)) => sprite.index = 1,
+    (Direction::Left, None) => sprite.index = 4,
+    (Direction::Right, None) => sprite.index = 5,
     _ => sprite.index = 4,
   }
 }
@@ -162,7 +164,7 @@ fn projectile_move_system(
       commands.entity(projectile).despawn();
       continue
     }
-    transform.translation.x += velocity.x * 0.5;
+    transform.translation.x += velocity.x;
     transform.translation.y += velocity.y;
   }
 }
@@ -170,23 +172,22 @@ fn projectile_move_system(
 // TODO: add timer for shoot sprite
 // TODO: alternate shooting claws
 fn player_shoot_system(
-  mut query: Query<(&Player,
+  mut query: Query<(&mut Player,
                     &Velocity,
                     &Transform)>,
-  mut event: EventWriter<ShootEvent>,
   mut commands: Commands,
   handles: Res<HandleMap>,
   input: Res<Input<KeyCode>>,
 ) {
-  let (player, player_velocity, player_transform) = query.single_mut()
+  let (mut player, player_velocity, player_transform) = query.single_mut()
     .expect("There was more than one player entity");
 
-  if input.just_released(KeyCode::Space) {
+  if input.just_pressed(KeyCode::Space) {
     let mut projectile_transform = player_transform.clone();
     projectile_transform.translation.y += 30.0;
     match player.facing {
-      Direction::Right  => projectile_transform.translation.x += 30.0,
-      Direction::Left|_ => projectile_transform.translation.x -= 30.0,
+      Direction::Right  => projectile_transform.translation.x += 26.0,
+      Direction::Left|_ => projectile_transform.translation.x -= 26.0,
     }
 
     commands.spawn_bundle(SpriteBundle {
@@ -194,15 +195,15 @@ fn player_shoot_system(
       transform: projectile_transform,
       ..Default::default()
     }).insert(Velocity {
-      x: player_velocity.x,
+      x: player_velocity.x * 0.3,
       y: 4.0,
     }).insert(Projectile);
 
-    event.send(ShootEvent)
+    player.shooting = Some(Instant::now());
   }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 enum Direction {
   Right,
   Left,
@@ -211,10 +212,10 @@ enum Direction {
 
 struct Projectile;
 #[derive(Debug)]
-struct ShootEvent;
 
 struct Player {
   facing: Direction,
+  shooting: Option<Instant>,
 }
 
 struct Velocity {
