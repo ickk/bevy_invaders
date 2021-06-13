@@ -20,10 +20,11 @@ fn main() {
     .add_plugins(DefaultPlugins)
     .insert_resource(HandleMap::new())
     .add_startup_system(setup.system())
-    .add_system(movement_system.system())
+    .add_system(player_movement_system.system())
     .add_system(player_sprite_system.system())
     .add_system(player_shoot_system.system())
     .add_system(projectile_move_system.system())
+    .add_system(animate_enemy_system.system())
     .run();
 }
 
@@ -50,25 +51,29 @@ fn setup(
   mut handles: ResMut<HandleMap>,
 ) {
   // Get handles for assets
-  handles.textures
-    .insert("player", asset_server.load("ferris.png"));
-  handles.textures
-    .insert("projectile", asset_server.load("projectile.png"));
-  let projectile_material_handle = materials.add(
-    handles.textures.get("projectile").unwrap().clone().into()
-  );
-  handles.color_materials
-    .insert("projectile", projectile_material_handle);
-
-  let mut texture_atlas = TextureAtlas::from_grid(
-    handles.textures.get("player").unwrap().clone(),
-    Vec2::new(29.0, 21.0), 6, 1);
-  texture_atlas.add_texture(sprite::Rect {
-    min: Vec2::new(0.0, 0.0),
-    max: Vec2::new(29.0, 21.0)
-  });
-  handles.texture_atlases
-    .insert("player", texture_atlases.add(texture_atlas));
+  let player_texture_atlas = {
+    let texture = asset_server.load("ferris.png");
+    handles.textures.insert("player", texture.clone_weak());
+    let atlas = texture_atlases.add(TextureAtlas::from_grid(
+      texture, Vec2::new(29.0, 21.0), 6, 1));
+    handles.texture_atlases.insert("player", atlas.clone_weak());
+    atlas
+  };
+  let _enemy_texture_atlas = {
+    let texture = asset_server.load("bird.png");
+    handles.textures.insert("enemy", texture.clone_weak());
+    let atlas = texture_atlases.add(TextureAtlas::from_grid(
+      texture, Vec2::new(29.0, 18.0), 8, 1));
+    handles.texture_atlases.insert("enemy", atlas.clone_weak());
+    atlas
+  };
+  let _projectile_material = {
+    let texture = asset_server.load("projectile.png");
+    handles.textures.insert("projectile", texture.clone_weak());
+    let material = materials.add(texture.into());
+    handles.color_materials.insert("projectile", material.clone());
+    material
+  };
 
   // Make background black
   commands.insert_resource(ClearColor(Color::rgb(0.0, 0.0, 0.0)));
@@ -78,22 +83,53 @@ fn setup(
 
   // Spawn player
   commands.spawn_bundle(SpriteSheetBundle {
-    texture_atlas: handles.texture_atlases.get("player").unwrap().clone(),
+    texture_atlas: player_texture_atlas,
     transform: {
         let mut trans = Transform::from_scale(Vec3::splat(2.0));
         trans.translation.y -= 325.0;
         trans
     },
     ..Default::default()
-  })
-  .insert(Player {
+  }).insert(Player {
     facing: Direction::None,
     shooting: None,
-  })
-  .insert(Velocity {
+  }).insert(Velocity {
     x: 0.0,
     y: 0.0,
   });
+
+  // Spawn enemy
+  commands.spawn_bundle(SpriteSheetBundle {
+    texture_atlas: _enemy_texture_atlas,
+    transform: {
+      let mut trans = Transform::from_scale(Vec3::splat(2.0));
+      trans.translation.y += 325.0;
+      trans
+    },
+    ..Default::default()
+  }).insert(Enemy {
+    facing: Direction::Right,
+  }).insert(Velocity {
+    x: 0.0,
+    y: 0.0,
+  }).insert(Timer::from_seconds(0.2, true));
+}
+
+fn animate_enemy_system(
+  time: Res<Time>,
+  texture_atlases: Res<Assets<TextureAtlas>>,
+  mut query: Query<(&mut Timer,
+                    &mut TextureAtlasSprite,
+                    &Handle<TextureAtlas>),
+                    With<Enemy>>,
+) {
+  for (mut timer, mut sprite, texture_atlas_handle) in query.iter_mut() {
+    timer.tick(time.delta());
+    if timer.finished() {
+      let texture_atlas = texture_atlases.get(texture_atlas_handle).unwrap();
+      sprite.index = ((sprite.index as usize + 1) % texture_atlas.textures.len()) as u32;
+    }
+  }
 }
 
 fn player_sprite_system(
@@ -119,7 +155,7 @@ fn player_sprite_system(
   }
 }
 
-fn movement_system(
+fn player_movement_system(
   mut query: Query<(&mut Player,
                     &mut Transform,
                     &mut Velocity)>,
@@ -195,7 +231,7 @@ fn player_shoot_system(
       transform: projectile_transform,
       ..Default::default()
     }).insert(Velocity {
-      x: player_velocity.x * 0.3,
+      x: player_velocity.x * 0.1,
       y: 4.0,
     }).insert(Projectile);
 
@@ -216,6 +252,10 @@ struct Projectile;
 struct Player {
   facing: Direction,
   shooting: Option<Instant>,
+}
+
+struct Enemy {
+  facing: Direction,
 }
 
 struct Velocity {
