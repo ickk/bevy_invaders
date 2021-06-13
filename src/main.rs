@@ -1,5 +1,4 @@
-use bevy::{prelude::*,
-           sprite};
+use bevy::prelude::*;
 use std::collections::HashMap;
 use std::time::{Instant,
                 Duration};
@@ -24,7 +23,8 @@ fn main() {
     .add_system(player_sprite_system.system())
     .add_system(player_shoot_system.system())
     .add_system(projectile_move_system.system())
-    .add_system(animate_enemy_system.system())
+    .add_system(enemy_movement_system.system())
+    .add_system(enemy_sprite_system.system())
     .run();
 }
 
@@ -91,7 +91,7 @@ fn setup(
     },
     ..Default::default()
   }).insert(Player {
-    facing: Direction::None,
+    facing: Direction::Left,
     shooting: None,
   }).insert(Velocity {
     x: 0.0,
@@ -110,24 +110,45 @@ fn setup(
   }).insert(Enemy {
     facing: Direction::Right,
   }).insert(Velocity {
-    x: 0.0,
-    y: 0.0,
+    x: 1.0,
+    y: 5.0,
   }).insert(Timer::from_seconds(0.2, true));
 }
 
-fn animate_enemy_system(
+fn enemy_movement_system(
+  mut query: Query<(&mut Enemy,
+                    &mut Transform,
+                    &mut Velocity)>
+) {
+  for (mut enemy, mut transform, mut velocity) in query.iter_mut() {
+    transform.translation.x += velocity.x;
+
+    if transform.translation.x > 600.0
+    || transform.translation.x < -600.0 {
+      velocity.x *= -1.0;
+      transform.translation.y -= velocity.y;
+      enemy.facing = match enemy.facing {
+        Direction::Left  => Direction::Right,
+        Direction::Right => Direction::Left,
+      };
+    }
+  }
+}
+
+fn enemy_sprite_system(
   time: Res<Time>,
-  texture_atlases: Res<Assets<TextureAtlas>>,
   mut query: Query<(&mut Timer,
                     &mut TextureAtlasSprite,
-                    &Handle<TextureAtlas>),
-                    With<Enemy>>,
+                    &Enemy)>,
 ) {
-  for (mut timer, mut sprite, texture_atlas_handle) in query.iter_mut() {
+  for (mut timer, mut sprite, enemy) in query.iter_mut() {
     timer.tick(time.delta());
     if timer.finished() {
-      let texture_atlas = texture_atlases.get(texture_atlas_handle).unwrap();
-      sprite.index = ((sprite.index as usize + 1) % texture_atlas.textures.len()) as u32;
+      let offset = match enemy.facing {
+        Direction::Left  => 4,
+        Direction::Right => 0,
+      };
+      sprite.index = ((sprite.index as usize + 1) % 4 + offset) as u32;
     }
   }
 }
@@ -151,7 +172,6 @@ fn player_sprite_system(
     (Direction::Right, Some(_)) => sprite.index = 1,
     (Direction::Left, None) => sprite.index = 4,
     (Direction::Right, None) => sprite.index = 5,
-    _ => sprite.index = 4,
   }
 }
 
@@ -168,7 +188,7 @@ fn player_movement_system(
   // TODO: use a curve for velocity -> linear accel to some maximum velocity, damper
   velocity.x = (input.pressed(KeyCode::Right) as i32 - input.pressed(KeyCode::Left) as i32) as f32 * 4.0;
   // move player
-  transform.translation.x = (-600.0 as f32).max(transform.translation.x + velocity.x).min(600.0);
+  transform.translation.x = (-550.0 as f32).max(transform.translation.x + velocity.x).min(550.0);
   // update player's direction
   if let Some(direction) = match velocity.x {
     v if v < 0.0 => Some(Direction::Left),
@@ -223,7 +243,7 @@ fn player_shoot_system(
     projectile_transform.translation.y += 30.0;
     match player.facing {
       Direction::Right  => projectile_transform.translation.x += 26.0,
-      Direction::Left|_ => projectile_transform.translation.x -= 26.0,
+      Direction::Left   => projectile_transform.translation.x -= 26.0,
     }
 
     commands.spawn_bundle(SpriteBundle {
@@ -231,7 +251,7 @@ fn player_shoot_system(
       transform: projectile_transform,
       ..Default::default()
     }).insert(Velocity {
-      x: player_velocity.x * 0.1,
+      x: player_velocity.x * 0.08,
       y: 4.0,
     }).insert(Projectile);
 
@@ -242,8 +262,7 @@ fn player_shoot_system(
 #[derive(Copy, Clone, Debug)]
 enum Direction {
   Right,
-  Left,
-  None,
+  Left
 }
 
 struct Projectile;
