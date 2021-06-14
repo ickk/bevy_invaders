@@ -5,7 +5,7 @@ authors = ["ickk <git@ickk.io>"]
 edition = "2018"
 
 [dependencies]
-bevy = { git = "https://github.com/bevyengine/bevy", branch = "main" }
+bevy = { git = "https://github.com/bevyengine/bevy", branch = "main", commit = "71bf07f5c085b9c02cbe5337040337c3ed8b0002"}
 
 [build-dependencies]
 chrono = "0.4"
