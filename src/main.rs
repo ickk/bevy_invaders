@@ -25,7 +25,6 @@ fn main() {
     .add_system(projectile_move_system.system())
     .add_system(enemy_movement_system.system())
     .add_system(enemy_sprite_system.system())
-    // TODO: 1-frame lag between enemy movement system and enemy sprite system
     .add_system(collision_system.system())
     .run();
 }
@@ -45,6 +44,56 @@ impl HandleMap {
   }
 }
 
+#[derive(Clone, Debug)]
+struct EnemyTable{
+  table: [[Option<Entity>; 7]; 4],
+  count: usize,
+  facing: Direction,
+}
+impl EnemyTable {
+  fn from_table(table: [[Option<Entity>; 7]; 4]) -> Self {
+    let mut count = 0; for r in table {
+      for entity in r {
+        if let Some(_) = entity {
+          count += 1;
+        }
+      }
+    }
+    let facing = Direction::Right;
+    Self { table, count, facing}
+  }
+  fn remove(&mut self, r: usize, c: usize) {
+    self.table[r][c] = None;
+    self.count -= 1;
+  }
+  fn swap_direction(&mut self) {
+    self.facing = match self.facing {
+      Direction::Right => Direction::Left,
+      Direction::Left => Direction::Right,
+    }
+  }
+  fn first_col(&self) -> Option<usize> {
+    for c in 0..self.table[0].len() {
+      for r in 0..self.table.len() {
+        if let Some(_) = self.table[r][c] {
+          return Some(c)
+        }
+      }
+    }
+    None
+  }
+  fn last_col(&self) -> Option<usize> {
+    for c in (0..self.table[0].len()).rev() {
+      for r in 0..self.table.len() {
+        if let Some(_) = self.table[r][c] {
+          return Some(c)
+        }
+      }
+    }
+    None
+  }
+}
+
 fn setup(
   mut commands: Commands,
   asset_server: Res<AssetServer>,
@@ -61,7 +110,7 @@ fn setup(
     handles.texture_atlases.insert("player", atlas.clone_weak());
     atlas
   };
-  let _enemy_texture_atlas = {
+  let enemy_texture_atlas = {
     let texture = asset_server.load("bird.png");
     handles.textures.insert("enemy", texture.clone_weak());
     let atlas = texture_atlases.add(TextureAtlas::from_grid(
@@ -83,78 +132,120 @@ fn setup(
   // spawn camera
   commands.spawn_bundle(OrthographicCameraBundle::new_2d());
 
-  // Spawn player
-  commands.spawn_bundle(SpriteSheetBundle {
-    texture_atlas: player_texture_atlas,
-    transform: {
-        let mut trans = Transform::from_scale(Vec3::splat(2.0));
-        trans.translation.y -= 325.0;
-        trans
-    },
-    ..Default::default()
-  }).insert(Player {
-    facing: Direction::Left,
-    shooting: None,
-  }).insert(Velocity {
-    x: 0.0,
-    y: 0.0,
-  });
+  { // Spawn player
+    commands.spawn_bundle(SpriteSheetBundle {
+      texture_atlas: player_texture_atlas,
+      transform: {
+          let mut trans = Transform::from_scale(Vec3::splat(2.0));
+          trans.translation.y -= 325.0;
+          trans
+      },
+      ..Default::default()
+    }).insert(Player {
+      facing: Direction::Left,
+      shooting: None,
+    }).insert(Velocity {
+      x: 0.0,
+      y: 0.0,
+    });
+  }
 
-  // Spawn enemy
-  commands.spawn_bundle(SpriteSheetBundle {
-    texture_atlas: _enemy_texture_atlas,
-    transform: {
-      let mut trans = Transform::from_scale(Vec3::splat(2.0));
-      trans.translation.y += 325.0;
-      trans
-    },
-    ..Default::default()
-  }).insert(Enemy {
-    facing: Direction::Right,
-  }).insert(Velocity {
-    x: 1.0,
-    y: 5.0,
-  }).insert(Timer::from_seconds(0.2, true));
+  { // Spawn enemy group
+    let enemy_group = commands.spawn_bundle((
+      EnemyGroup,
+      Transform::from_translation(Vec3::new(0.0, 0.0, 0.0)),
+      GlobalTransform::identity(),
+      Velocity { x: 1.0, y: 12.0 },
+    )).id();
+    let mut table = [[None; 7]; 4];
+    for r in 0..table.len() {
+      for c in 0..table[0].len() {
+        let child = commands.spawn_bundle(SpriteSheetBundle {
+            texture_atlas: enemy_texture_atlas.clone(),
+            transform: {
+              let mut trans = Transform::from_scale(Vec3::splat(2.0));
+              trans.translation.y += 325.0 - (r * 40) as f32;
+              trans.translation.x -= (c * 60) as f32;
+              trans
+            },
+            ..Default::default()
+          }).insert(Enemy)
+          .insert(Velocity {
+            x: 1.0,
+            y: 24.0,
+          }).insert(Timer::from_seconds(0.2, true))
+          .id();
+        commands.entity(enemy_group).push_children(&[child]);
+        table[r][c] = Some(child);
+      }
+      eprintln!("{:?}", table[r]);
+    }
+    commands.insert_resource(EnemyTable::from_table(table));
+  }
 }
+
+struct EnemyGroup;
 
 fn collision_system(
   query_projectile: Query<(Entity,
                            &Transform),
                           With<Projectile>>,
-  query_enemy: Query<(Entity,
-                      &Transform),
+  query_enemy: Query<&GlobalTransform,
                      With<Enemy>>,
+  mut enemy_table: ResMut<EnemyTable>,
   mut commands: Commands,
 ) {
-  for (projectile, projectile_transform) in query_projectile.iter() {
-    for (enemy, enemy_transform) in query_enemy.iter() {
-      if projectile_transform.translation.x < enemy_transform.translation.x + 20.0
-      && projectile_transform.translation.x > enemy_transform.translation.x - 20.0
-      && projectile_transform.translation.y < enemy_transform.translation.y + 20.0
-      && projectile_transform.translation.y > enemy_transform.translation.y - 20.0 {
-        commands.entity(enemy).despawn();
-        commands.entity(projectile).despawn();
+  let enemies = enemy_table.table;
+  let mut collision = false;
+  for (projectile, projectile_trans) in query_projectile.iter() {
+    for (r, row) in enemies.iter().enumerate() {
+      for (c, &entity) in row.iter().enumerate() {
+        if let Some(entity) = entity {
+          let transform = query_enemy.get(entity).unwrap();
+          if projectile_trans.translation.x < transform.translation.x + 28.0
+          && projectile_trans.translation.x > transform.translation.x - 28.0
+          && projectile_trans.translation.y < transform.translation.y + 17.0
+          && projectile_trans.translation.y > transform.translation.y - 17.0 {
+            commands.entity(entity).despawn();
+            commands.entity(projectile).despawn();
+            enemy_table.remove(r, c);
+            eprintln!("enemy despawned at: {},{}", r, c);
+            collision = true;
+          }
+        }
       }
+    }
+  }
+  if collision {
+    for r in enemy_table.table.iter() {
+      eprintln!("{:?}", r);
+    }
+    if enemy_table.count <= 0 {
+      println!("You win");
     }
   }
 }
 
-fn enemy_movement_system(
-  mut query: Query<(&mut Enemy,
-                    &mut Transform,
-                    &mut Velocity)>
-) {
-  for (mut enemy, mut transform, mut velocity) in query.iter_mut() {
-    transform.translation.x += velocity.x;
+// TODO: use single entity for enemy with cells for hitboxes and damage.
+// or use parent() entity to manipulate all entity transforms simulateously
 
-    if transform.translation.x > 600.0
-    || transform.translation.x < -600.0 {
-      velocity.x *= -1.0;
+fn enemy_movement_system(
+  mut query: Query<(&mut Transform,
+                    &mut Velocity),
+                   With<EnemyGroup>>,
+  mut enemy_table: ResMut<EnemyTable>,
+) {
+  if let Ok((mut transform, mut velocity)) = query.single_mut() {
+    let new_trans_x = transform.translation.x + velocity.x.trunc();
+
+    if new_trans_x > (600.0 + (enemy_table.first_col().unwrap()*60) as f32)
+    || new_trans_x < (-600.0 + (enemy_table.last_col().unwrap()*60) as f32) {
+    // reverse direction and speed up
+      velocity.x = (velocity.x + 0.6f32.copysign(velocity.x)) * -1.0;
       transform.translation.y -= velocity.y;
-      enemy.facing = match enemy.facing {
-        Direction::Left  => Direction::Right,
-        Direction::Right => Direction::Left,
-      };
+      enemy_table.swap_direction();
+    } else {
+      transform.translation.x = new_trans_x;
     }
   }
 }
@@ -162,13 +253,14 @@ fn enemy_movement_system(
 fn enemy_sprite_system(
   time: Res<Time>,
   mut query: Query<(&mut Timer,
-                    &mut TextureAtlasSprite,
-                    &Enemy)>,
+                    &mut TextureAtlasSprite),
+                   With<Enemy>>,
+  enemy_table: Res<EnemyTable>,
 ) {
-  for (mut timer, mut sprite, enemy) in query.iter_mut() {
+  for (mut timer, mut sprite) in query.iter_mut() {
     timer.tick(time.delta());
     if timer.finished() {
-      let offset = match enemy.facing {
+      let offset = match enemy_table.facing {
         Direction::Left  => 4,
         Direction::Right => 0,
       };
@@ -297,9 +389,7 @@ struct Player {
   shooting: Option<Instant>,
 }
 
-struct Enemy {
-  facing: Direction,
-}
+struct Enemy;
 
 struct Velocity {
   x: f32,
